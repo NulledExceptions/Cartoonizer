@@ -1,0 +1,83 @@
+#!/bin/bash
+# Cartoonizer macOS .app launcher
+# Creates the per-user venv on first run, installs deps, then launches the GUI.
+
+set -e
+
+APP_NAME="Cartoonizer"
+THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONTENTS_DIR="$(cd "$THIS_DIR/.." && pwd)"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/$APP_NAME"
+VENV_DIR="$APP_SUPPORT_DIR/venv"
+CACHE_DIR="$APP_SUPPORT_DIR/hf_cache"
+LOG_DIR="/Users/markmarnell/Code/Cartoonizer_Full_App_and_Source/log"
+LOG_FILE="$LOG_DIR/launcher.log"
+PYTHON_BIN="/usr/bin/python3"
+
+mkdir -p "$APP_SUPPORT_DIR" "$CACHE_DIR" "$LOG_DIR"
+
+exec >>"$LOG_FILE" 2>&1
+echo
+echo "==== $(date) | ${APP_NAME} launcher started ===="
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+handle_error() {
+  /usr/bin/osascript -e "display alert \"${APP_NAME} Error\" message \"See log at $LOG_FILE\""
+  exit 1
+}
+trap handle_error ERR
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  /usr/bin/osascript -e 'display alert "Python 3 not found" message "Please install Python 3 from python.org, then reopen Cartoonizer."'
+  exit 1
+fi
+
+# Create venv if missing
+if [ ! -d "$VENV_DIR" ]; then
+  log "Creating virtual environment at $VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+# Activate venv
+log "Activating venv"
+source "$VENV_DIR/bin/activate"
+
+# Install requirements if not done before
+REQ_FILE="$RESOURCES_DIR/requirements.txt"
+MARKER="$VENV_DIR/.deps_installed"
+REQ_HASH_FILE="$VENV_DIR/.deps_hash"
+CURRENT_REQ_HASH="$(shasum "$REQ_FILE" | awk '{print $1}')"
+
+INSTALL_DEPS=false
+if [ ! -f "$MARKER" ] || [ ! -f "$REQ_HASH_FILE" ]; then
+  INSTALL_DEPS=true
+elif [ "$(cat "$REQ_HASH_FILE")" != "$CURRENT_REQ_HASH" ]; then
+  INSTALL_DEPS=true
+fi
+
+if [ "$INSTALL_DEPS" = true ]; then
+  log "Installing/upgrading Python dependencies"
+  pip install --upgrade pip
+  pip install -r "$REQ_FILE"
+  touch "$MARKER"
+  echo "$CURRENT_REQ_HASH" > "$REQ_HASH_FILE"
+else
+  log "Dependencies already up to date"
+fi
+
+# Use local cache inside the app for models (SD weights, etc)
+export HF_HOME="$CACHE_DIR"
+export PYTHONUNBUFFERED=1
+export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+export CUDA_VISIBLE_DEVICES=""
+
+log "Launching Gradio UI"
+
+# Launch the Gradio GUI
+cd "$RESOURCES_DIR"
+python -u cartoonizer.py --gui
