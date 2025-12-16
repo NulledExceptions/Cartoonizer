@@ -379,6 +379,10 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         status_lines.append("Done!")
         return result.images[0], "\n".join(status_lines)
 
+    def update_status_text(status: str) -> str:
+        """Pass status strings from the hidden State to the visible textbox."""
+        return status
+
     theme = gr.themes.Soft(
         primary_hue="orange",
         secondary_hue="violet",
@@ -457,18 +461,26 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
 
             with gr.Column(scale=1, elem_classes="output-panel"):
                 out = gr.Image(label="Cartoonized Output")
+                initial_status = "Idle. Upload an image and click Generate to start."
                 status_box = gr.Textbox(
                     label="Status / Progress",
-                    value="Idle. Upload an image and click Generate to start.",
+                    value=initial_status,
                     interactive=False,
                     lines=6,
                     elem_classes="status-box",
                 )
+                status_state = gr.State(initial_status)
 
-        btn.click(
+        generate_event = btn.click(
             infer,
             [img, style, extra, strength, guidance, steps, seed, model_id],
-            [out, status_box],
+            [out, status_state],
+        )
+        generate_event.then(
+            update_status_text,
+            inputs=status_state,
+            outputs=status_box,
+            show_progress=False,
         )
         demo.queue(concurrency_count=1, max_size=8)
 
