@@ -342,6 +342,7 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         steps: int,
         seed: int,
         model_id: str,
+        max_side: int,
         progress: gr.Progress = gr.Progress(track_tqdm=True),
     ):
         if image is None:
@@ -368,9 +369,17 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         if seed >= 0:
             gen = torch.Generator(device=pipe.device).manual_seed(seed)
 
+        # Resize image according to user setting
+        img = image.convert("RGB")
+        w, h = img.size
+        scale = min(max_side / max(w, h), 1.0)
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        status_lines.append(f"Processing at resolution {img.size[0]}x{img.size[1]}...")
+
         result = pipe(
             prompt=prompt,
-            image=image.convert("RGB"),
+            image=img,
             strength=strength,
             guidance_scale=guidance,
             negative_prompt=negative_prompt,
@@ -458,6 +467,9 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
                     value=default_model,
                     placeholder="e.g. Lykon/dreamshaper-8",
                 )
+                max_side = gr.Slider(
+                    512, 2048, 768, step=128, label="Max resolution (pixels)"
+                )
                 btn = gr.Button("Generate", variant="primary")
 
             with gr.Column(scale=1, elem_classes="output-panel"):
@@ -474,7 +486,7 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
 
         generate_event = btn.click(
             infer,
-            [img, style, extra, strength, guidance, steps, seed, model_id],
+            [img, style, extra, strength, guidance, steps, seed, model_id, max_side],
             [out, status_state],
         )
         generate_event.then(
