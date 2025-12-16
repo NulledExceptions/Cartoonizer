@@ -343,6 +343,9 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         seed: int,
         model_id: str,
         max_side: int,
+        export_format: str,
+        quality: int,
+        output_scale: float,
         progress: gr.Progress = gr.Progress(track_tqdm=True),
     ):
         if image is None:
@@ -387,7 +390,29 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
             generator=gen,
         )
         status_lines.append("Done!")
-        return result.images[0], "\n".join(status_lines)
+        
+        out_img = result.images[0]
+        
+        # Handle format selection and downscaling
+        if export_format == "JPEG (smaller)":
+            if out_img.mode != 'RGB':
+                out_img = out_img.convert('RGB')
+            status_lines.append(f"Format: JPEG @ quality {quality}")
+        else:
+            status_lines.append("Format: PNG (lossless)")
+        
+        # Apply output scaling to adjust file size
+        if output_scale != 1.0:
+            new_w = int(out_img.width * output_scale)
+            new_h = int(out_img.height * output_scale)
+            # Use LANCZOS for downscaling, Resampling.LANCZOS for upscaling (best quality)
+            out_img = out_img.resize((new_w, new_h), Image.LANCZOS)
+            if output_scale > 1.0:
+                status_lines.append(f"Upscaled to {new_w}x{new_h}")
+            else:
+                status_lines.append(f"Downscaled to {new_w}x{new_h}")
+        
+        return out_img, "\n".join(status_lines)
 
     def update_status_text(status: str) -> str:
         """Pass status strings from the hidden State to the visible textbox."""
@@ -468,7 +493,18 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
                     placeholder="e.g. Lykon/dreamshaper-8",
                 )
                 max_side = gr.Slider(
-                    512, 2048, 768, step=128, label="Max resolution (pixels)"
+                    512, 4096, 768, step=128, label="Max resolution (pixels) — higher = larger file"
+                )
+                export_format = gr.Radio(
+                    ["PNG (lossless)", "JPEG (smaller)"],
+                    value="PNG (lossless)",
+                    label="Export format",
+                )
+                quality = gr.Slider(
+                    70, 95, 90, step=1, label="JPEG quality (affects file size)"
+                )
+                output_scale = gr.Slider(
+                    0.25, 2.0, 1.0, step=0.25, label="Output scale (1.0 = full, 2.0 = upscaled 2x — larger files)"
                 )
                 btn = gr.Button("Generate", variant="primary")
 
@@ -486,7 +522,7 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
 
         generate_event = btn.click(
             infer,
-            [img, style, extra, strength, guidance, steps, seed, model_id, max_side],
+            [img, style, extra, strength, guidance, steps, seed, model_id, max_side, export_format, quality, output_scale],
             [out, status_state],
         )
         generate_event.then(
