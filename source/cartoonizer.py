@@ -314,10 +314,19 @@ def cartoonize_folder(
 # Gradio GUI
 # ---------------------------
 
-def build_ui(default_model: str = "Lykon/dreamshaper-8"):
+def build_ui(default_model: str = "Lykon/dreamshaper-8", nsfw_model: str = "crumb/bloom-768"):
     """
     Build the Gradio UI for interactive use.
     """
+    # NSFW models that don't have content filters
+    nsfw_models = [
+        "runwayml/stable-diffusion-v1-5",
+        "dreamlike-art/dreamlike-photoreal-2.0",
+        "Lykon/dreamshaper-8",
+        "stabilityai/stable-diffusion-2-1-base",
+        "nitrosocke/Goofy-Cartoon",
+    ]
+    
     device = get_device()
     cache = {"pipe": None, "model": None}
 
@@ -342,6 +351,8 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         steps: int,
         seed: int,
         model_id: str,
+        use_nsfw: bool,
+        nsfw_model_choice: str,
         max_side: int,
         export_format: str,
         quality: int,
@@ -351,68 +362,85 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         if image is None:
             return None, "Please upload an image to begin."
 
+        # Use NSFW model if toggle is enabled
+        if use_nsfw:
+            model_id = nsfw_model_choice
+
         status_lines = []
         status_lines.append("Loading/initializing model (first run may take several minutes)...")
         log("Starting inference job")
-        pipe = ensure_pipe(model_id, progress=progress)
-        status_lines.append(f"Model ready on {pipe.device}. Generating image...")
-
-        presets = {
-            "Anime": "highly detailed anime style, clean lines, cel shading, vibrant colors",
-            "Comic": "comic book style, bold ink outlines, halftone shading, dramatic lighting",
-            "Pixar": "3D Pixar style, soft lighting, smooth shading, expressive eyes",
-            "Sketch": "clean line art sketch, black ink, minimal shading, white background",
-            "Watercolor": "soft watercolor painting, pastel colors, gentle edges",
-        }
-        base = presets.get(style, presets["Anime"])
-        prompt = base + (", " + extra if extra else "")
-        negative_prompt = "blurry, distorted, extra limbs, text, logo"
-
-        gen = None   # type: ignore
-        if seed >= 0:
-            gen = torch.Generator(device=pipe.device).manual_seed(seed)
-
-        # Resize image according to user setting
-        img = image.convert("RGB")
-        w, h = img.size
-        scale = min(max_side / max(w, h), 1.0)
-        if scale < 1.0:
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-        status_lines.append(f"Processing at resolution {img.size[0]}x{img.size[1]}...")
-
-        result = pipe(
-            prompt=prompt,
-            image=img,
-            strength=strength,
-            guidance_scale=guidance,
-            negative_prompt=negative_prompt,
-            num_inference_steps=steps,
-            generator=gen,
-        )
-        status_lines.append("Done!")
+        try:
+            pipe = ensure_pipe(model_id, progress=progress)
+        except Exception as e:
+            error_msg = f"Error loading model '{model_id}': {str(e)}"
+            log(error_msg)
+            return None, error_msg
         
-        out_img = result.images[0]
-        
-        # Handle format selection and downscaling
-        if export_format == "JPEG (smaller)":
-            if out_img.mode != 'RGB':
-                out_img = out_img.convert('RGB')
-            status_lines.append(f"Format: JPEG @ quality {quality}")
-        else:
-            status_lines.append("Format: PNG (lossless)")
-        
-        # Apply output scaling to adjust file size
-        if output_scale != 1.0:
-            new_w = int(out_img.width * output_scale)
-            new_h = int(out_img.height * output_scale)
-            # Use LANCZOS for downscaling, Resampling.LANCZOS for upscaling (best quality)
-            out_img = out_img.resize((new_w, new_h), Image.LANCZOS)
-            if output_scale > 1.0:
-                status_lines.append(f"Upscaled to {new_w}x{new_h}")
+        try:
+            status_lines.append(f"Model ready on {pipe.device}. Generating image...")
+
+            presets = {
+                "Anime": "highly detailed anime style, clean lines, cel shading, vibrant colors",
+                "Comic": "comic book style, bold ink outlines, halftone shading, dramatic lighting",
+                "Pixar": "3D Pixar style, soft lighting, smooth shading, expressive eyes",
+                "Sketch": "clean line art sketch, black ink, minimal shading, white background",
+                "Watercolor": "soft watercolor painting, pastel colors, gentle edges",
+                "Realistic": "highly detailed realistic photograph, natural lighting, intricate details, sharp focus",
+                "Photorealistic": "professional photorealistic rendering, cinematic lighting, high resolution, ultra detailed, 8k",
+            }
+            base = presets.get(style, presets["Anime"])
+            prompt = base + (", " + extra if extra else "")
+            negative_prompt = "blurry, distorted, extra limbs, text, logo"
+
+            gen = None   # type: ignore
+            if seed >= 0:
+                gen = torch.Generator(device=pipe.device).manual_seed(seed)
+
+            # Resize image according to user setting
+            img = image.convert("RGB")
+            w, h = img.size
+            scale = min(max_side / max(w, h), 1.0)
+            if scale < 1.0:
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            status_lines.append(f"Processing at resolution {img.size[0]}x{img.size[1]}...")
+
+            result = pipe(
+                prompt=prompt,
+                image=img,
+                strength=strength,
+                guidance_scale=guidance,
+                negative_prompt=negative_prompt,
+                num_inference_steps=steps,
+                generator=gen,
+            )
+            status_lines.append("Done!")
+            
+            out_img = result.images[0]
+            
+            # Handle format selection and downscaling
+            if export_format == "JPEG (smaller)":
+                if out_img.mode != 'RGB':
+                    out_img = out_img.convert('RGB')
+                status_lines.append(f"Format: JPEG @ quality {quality}")
             else:
-                status_lines.append(f"Downscaled to {new_w}x{new_h}")
-        
-        return out_img, "\n".join(status_lines)
+                status_lines.append("Format: PNG (lossless)")
+            
+            # Apply output scaling to adjust file size
+            if output_scale != 1.0:
+                new_w = int(out_img.width * output_scale)
+                new_h = int(out_img.height * output_scale)
+                # Use LANCZOS for downscaling, Resampling.LANCZOS for upscaling (best quality)
+                out_img = out_img.resize((new_w, new_h), Image.LANCZOS)
+                if output_scale > 1.0:
+                    status_lines.append(f"Upscaled to {new_w}x{new_h}")
+                else:
+                    status_lines.append(f"Downscaled to {new_w}x{new_h}")
+            
+            return out_img, "\n".join(status_lines)
+        except Exception as e:
+            error_msg = f"Error during generation: {str(e)}"
+            log(error_msg)
+            return None, error_msg
 
     def update_status_text(status: str) -> str:
         """Pass status strings from the hidden State to the visible textbox."""
@@ -450,7 +478,7 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         gr.HTML(
             """
             <div class="stats-row">
-                <div class="stat-card"><span>5</span>Signature styles</div>
+                <div class="stat-card"><span>7</span>Signature styles</div>
                 <div class="stat-card"><span>MPS</span>Apple Silicon acceleration</div>
                 <div class="stat-card"><span>Offline</span>No cloud uploads</div>
             </div>
@@ -465,7 +493,7 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
                     label="Drop an image or click to upload",
                 )
                 style = gr.Radio(
-                    ["Anime", "Comic", "Pixar", "Sketch", "Watercolor"],
+                    ["Anime", "Comic", "Pixar", "Sketch", "Watercolor", "Realistic", "Photorealistic"],
                     value="Anime",
                     label="Style palette",
                 )
@@ -491,6 +519,16 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
                     label="Model ID (Hugging Face)",
                     value=default_model,
                     placeholder="e.g. Lykon/dreamshaper-8",
+                )
+                use_nsfw = gr.Checkbox(
+                    label="Use NSFW Model",
+                    value=False,
+                )
+                nsfw_model_dropdown = gr.Dropdown(
+                    label="NSFW Model",
+                    choices=nsfw_models,
+                    value=nsfw_models[0],
+                    visible=False,
                 )
                 max_side = gr.Slider(
                     512, 4096, 768, step=128, label="Max resolution (pixels) — higher = larger file"
@@ -518,18 +556,18 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
                     lines=6,
                     elem_classes="status-box",
                 )
-                status_state = gr.State(initial_status)
+
+        # Toggle dropdown visibility when checkbox changes
+        use_nsfw.change(
+            fn=lambda checked: gr.update(visible=checked),
+            inputs=use_nsfw,
+            outputs=nsfw_model_dropdown,
+        )
 
         generate_event = btn.click(
             infer,
-            [img, style, extra, strength, guidance, steps, seed, model_id, max_side, export_format, quality, output_scale],
-            [out, status_state],
-        )
-        generate_event.then(
-            update_status_text,
-            inputs=status_state,
-            outputs=status_box,
-            show_progress=False,
+            [img, style, extra, strength, guidance, steps, seed, model_id, use_nsfw, nsfw_model_dropdown, max_side, export_format, quality, output_scale],
+            [out, status_box],
         )
         demo.queue(concurrency_count=1, max_size=8)
 
@@ -548,6 +586,11 @@ def parse_args():
         "--model",
         default="Lykon/dreamshaper-8",
         help="Hugging Face model id (SD 1.5-based).",
+    )
+    ap.add_argument(
+        "--nsfw-model",
+        default="crumb/bloom-768",
+        help="Hugging Face model id to use when NSFW mode is enabled (SD 1.5-based).",
     )
     ap.add_argument(
         "--style",
@@ -614,7 +657,7 @@ def main():
     # GUI mode (used by the .app launcher)
     if args.gui:
         log("Building Gradio UI...")
-        demo = build_ui(default_model=args.model)
+        demo = build_ui(default_model=args.model, nsfw_model=args.nsfw_model)
         port = pick_server_port(7860)
         if port != 7860:
             print(f"[i] Port 7860 unavailable, using {port} instead.")
