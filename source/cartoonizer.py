@@ -129,8 +129,9 @@ def load_img2img_pipeline(
     if device is None:
         device = get_device()
 
-    # Use float16 on GPU/MPS if possible for speed, float32 on CPU.
-    if use_half and device in ("cuda", "mps"):
+    # MPS has issues with float16 VAE decoding (produces black images).
+    # Use float16 only on CUDA, float32 everywhere else for compatibility.
+    if use_half and device == "cuda":
         dtype = torch.float16
     else:
         dtype = torch.float32
