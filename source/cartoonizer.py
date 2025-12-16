@@ -613,6 +613,7 @@ def main():
 
     # GUI mode (used by the .app launcher)
     if args.gui:
+        log("Building Gradio UI...")
         demo = build_ui(default_model=args.model)
         port = pick_server_port(7860)
         if port != 7860:

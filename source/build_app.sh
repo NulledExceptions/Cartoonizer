@@ -16,6 +16,7 @@ cp cartoonizer_launcher "$MACOS/cartoonizer_launcher"
 chmod +x "$MACOS/cartoonizer_launcher"
 cp cartoonizer.py "$RESOURCES/cartoonizer.py"
 cp requirements.txt "$RESOURCES/requirements.txt"
+cp progress_window.py "$RESOURCES/progress_window.py"
 if [ -f assets/Cartoonizer.icns ]; then
   cp assets/Cartoonizer.icns "$RESOURCES/Cartoonizer.icns"
 fi
