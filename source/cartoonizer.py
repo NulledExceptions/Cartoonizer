@@ -6,6 +6,8 @@ import threading
 import time
 import types
 import webbrowser
+import sys
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -14,13 +16,91 @@ from diffusers import StableDiffusionImg2ImgPipeline
 from PIL import Image
 import gradio as gr
 
-APP_DIR = Path(__file__).resolve().parent
-FAVICON_PATH = APP_DIR / "cartoonizer_web_icon.png"
+# ---------------------------
+# Path resolution (for bundled app + dev environments)
+# ---------------------------
+
+def get_app_root() -> Path:
+    """
+    Determine the app root directory.
+    
+    In a PyInstaller bundled app:
+      - sys.executable points to the app's embedded Python
+      - We find the .app bundle by walking up the directory tree
+    
+    In a development environment:
+      - __file__ is cartoonizer.py in the source/ directory
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as a PyInstaller bundle
+        # sys._MEIPASS is the temporary directory where PyInstaller extracts files
+        app_root = Path(sys._MEIPASS)
+    else:
+        # Running from source
+        app_root = Path(__file__).resolve().parent
+    
+    return app_root
+
+def find_asset(filename: str) -> Optional[Path]:
+    """
+    Find an asset file in various locations:
+    1. assets/ subfolder (dev environment)
+    2. Current directory (bundled app)
+    3. Parent/sibling directories
+    """
+    app_root = get_app_root()
+    
+    # Try assets/ folder first
+    candidates = [
+        app_root / "assets" / filename,
+        app_root / filename,
+        Path.home() / "Library" / "Application Support" / "Cartoonizer" / filename,
+    ]
+    
+    for path in candidates:
+        if path.exists():
+            return path
+    
+    return None
+
+APP_ROOT = get_app_root()
+FAVICON_PATH = find_asset("cartoonizer_web_icon.png")
 MAX_IMAGE_SIDE = int(os.environ.get("CARTOONIZER_MAX_SIDE", "768"))
+
+# ---------------------------
+# Logging setup
+# ---------------------------
+
+def setup_logging(log_file: Optional[Path] = None) -> None:
+    """
+    Configure logging to both file and console.
+    If running as a bundled app, write to ~/Library/Logs/Cartoonizer/
+    """
+    if log_file is None:
+        # Default location for macOS app logs
+        log_dir = Path.home() / "Library" / "Logs" / "Cartoonizer"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "app.log"
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    
+    return log_file
+
+LOG_FILE = setup_logging()
 
 
 def log(msg: str) -> None:
+    """Log a message with the [Cartoonizer] prefix."""
     print(f"[Cartoonizer] {msg}", flush=True)
+    logging.info(msg)
 
 
 CUSTOM_CSS = """
@@ -348,8 +428,11 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         output_scale: float,
         progress: gr.Progress = gr.Progress(track_tqdm=True),
     ):
+        log(f"[DEBUG] infer() called with image={image is not None}, style={style}")
         if image is None:
-            return None, "Please upload an image to begin."
+            msg = "Please upload an image to begin."
+            log(f"[DEBUG] No image provided: {msg}")
+            return None, msg
 
         status_lines = []
         status_lines.append("Loading/initializing model (first run may take several minutes)...")
@@ -427,15 +510,11 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         body_background_fill_dark="transparent",
         block_background_fill="rgba(15,15,25,0.9)",
     )
-    favicon = str(FAVICON_PATH) if FAVICON_PATH.exists() else None
-
     with gr.Blocks(
         title="Cartoonizer Studio",
         theme=theme,
         css=CUSTOM_CSS,
         analytics_enabled=False,
-        show_api=False,
-        favicon_path=favicon,
     ) as demo:
         gr.HTML(
             """
@@ -670,4 +749,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # If running as bundled app and no args provided, default to GUI mode
+    if getattr(sys, 'frozen', False) and len(sys.argv) == 1:
+        sys.argv.append('--gui')
     main()

@@ -427,15 +427,11 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8"):
         body_background_fill_dark="transparent",
         block_background_fill="rgba(15,15,25,0.9)",
     )
-    favicon = str(FAVICON_PATH) if FAVICON_PATH.exists() else None
-
     with gr.Blocks(
         title="Cartoonizer Studio",
         theme=theme,
         css=CUSTOM_CSS,
         analytics_enabled=False,
-        show_api=False,
-        favicon_path=favicon,
     ) as demo:
         gr.HTML(
             """
