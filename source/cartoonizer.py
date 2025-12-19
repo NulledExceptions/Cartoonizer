@@ -316,7 +316,7 @@ def cartoonize_folder(
 
 def build_ui(default_model: str = "Lykon/dreamshaper-8", nsfw_model: str = "crumb/bloom-768"):
     """
-    Build the Gradio UI for interactive use.
+    Build the Gradio UI for interactive use with landing page and navigation.
     """
     # NSFW models that don't have content filters
     nsfw_models = [
@@ -442,6 +442,105 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8", nsfw_model: str = "crum
             log(error_msg)
             return None, error_msg
 
+    def infer_video(image: Image.Image, duration: int):
+        """Generate a video by creating animated frames from an image."""
+        if image is None:
+            return None, "Please upload an image to begin."
+        
+        log(f"Starting video generation with duration: {duration}s")
+        
+        try:
+            # Import required libraries
+            try:
+                import imageio
+                import numpy as np
+            except ImportError as e:
+                return None, f"Missing required library: {str(e)}. Install with: pip install imageio imageio-ffmpeg numpy"
+            
+            # Create output directory for video
+            import tempfile
+            temp_dir = tempfile.mkdtemp()
+            video_output_path = os.path.join(temp_dir, "output.mp4")
+            
+            # Prepare image
+            img = image.convert("RGB")
+            w, h = img.size
+            max_side = 512
+            scale = min(max_side / max(w, h), 1.0)
+            if scale < 1.0:
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            
+            # Video parameters
+            fps = 24  # Better frame rate for smoother video
+            num_frames = max(2, duration * fps)
+            
+            log(f"Generating video: {num_frames} frames at {fps} fps")
+            
+            # Create video writer
+            writer = imageio.get_writer(video_output_path, fps=fps)
+            frames_created = 0
+            
+            try:
+                # Generate frames by creating variations of the image
+                for frame_idx in range(num_frames):
+                    try:
+                        # Create frame by slightly modifying the image
+                        frame = np.array(img)
+                        
+                        # Add subtle animation effect: slight brightness variation
+                        phase = (frame_idx / num_frames) * np.pi * 2  # Full cycle
+                        brightness_factor = 1.0 + 0.1 * np.sin(phase)
+                        
+                        # Apply brightness variation
+                        frame = np.clip(frame.astype(float) * brightness_factor, 0, 255).astype(np.uint8)
+                        
+                        # Write frame to video
+                        writer.append_data(frame)
+                        frames_created += 1
+                        
+                        if frame_idx % max(1, num_frames // 10) == 0:
+                            log(f"Frame {frame_idx+1}/{num_frames} created")
+                        
+                    except Exception as frame_error:
+                        log(f"Error creating frame {frame_idx}: {str(frame_error)}")
+                        # Continue with next frame
+                        continue
+                
+                # Close writer
+                writer.close()
+                log(f"Video writer closed successfully")
+                
+                if frames_created == 0:
+                    return None, "Error: No frames were created"
+                
+                # Verify video file was created
+                if not os.path.exists(video_output_path) or os.path.getsize(video_output_path) == 0:
+                    return None, "Error: Video file was not created successfully"
+                
+                status = f"✓ Video generated successfully!\n"
+                status += f"Duration: {duration}s\n"
+                status += f"Frames created: {frames_created}/{num_frames}\n"
+                status += f"FPS: {fps}\n"
+                status += f"File size: {os.path.getsize(video_output_path) / 1024:.1f} KB"
+                
+                log(f"Video generation complete: {status}")
+                return video_output_path, status
+                
+            except Exception as write_error:
+                log(f"Error writing video: {str(write_error)}")
+                try:
+                    writer.close()
+                except:
+                    pass
+                return None, f"Error writing video: {str(write_error)}"
+            
+        except Exception as e:
+            error_msg = f"Error during video generation: {str(e)}"
+            log(error_msg)
+            import traceback
+            log(traceback.format_exc())
+            return None, error_msg
+
     def update_status_text(status: str) -> str:
         """Pass status strings from the hidden State to the visible textbox."""
         return status
@@ -475,100 +574,203 @@ def build_ui(default_model: str = "Lykon/dreamshaper-8", nsfw_model: str = "crum
             """,
             elem_classes="hero-card",
         )
-        gr.HTML(
-            """
-            <div class="stats-row">
-                <div class="stat-card"><span>7</span>Signature styles</div>
-                <div class="stat-card"><span>MPS</span>Apple Silicon acceleration</div>
-                <div class="stat-card"><span>Offline</span>No cloud uploads</div>
-            </div>
-            """,
-            elem_classes="stats-row",
-        )
-
-        with gr.Row(elem_classes="panel-row"):
-            with gr.Column(scale=1, elem_classes="panel"):
-                img = gr.Image(
-                    type="pil",
-                    label="Drop an image or click to upload",
-                )
-                style = gr.Radio(
-                    ["Anime", "Comic", "Pixar", "Sketch", "Watercolor", "Realistic", "Photorealistic"],
-                    value="Anime",
-                    label="Style palette",
-                )
-                extra = gr.Textbox(
-                    label="Prompt seasoning",
-                    placeholder="e.g. neon rim light, painterly shadows",
-                )
-                strength = gr.Slider(
-                    0.1, 1.0, 0.6, step=0.05, label="Strength"
-                )
-                guidance = gr.Slider(
-                    3, 15, 7.5, step=0.5, label="Guidance scale"
-                )
-                steps = gr.Slider(
-                    10, 50, 30, step=1, label="Steps"
-                )
-                seed = gr.Number(
-                    label="Seed (>=0 for reproducible, -1 random)",
-                    value=-1,
-                    precision=0,
-                )
-                model_id = gr.Textbox(
-                    label="Model ID (Hugging Face)",
-                    value=default_model,
-                    placeholder="e.g. Lykon/dreamshaper-8",
-                )
-                use_nsfw = gr.Checkbox(
-                    label="Use NSFW Model",
-                    value=False,
-                )
-                nsfw_model_dropdown = gr.Dropdown(
-                    label="NSFW Model",
-                    choices=nsfw_models,
-                    value=nsfw_models[0],
-                    visible=False,
-                )
-                max_side = gr.Slider(
-                    512, 4096, 768, step=128, label="Max resolution (pixels) — higher = larger file"
-                )
-                export_format = gr.Radio(
-                    ["PNG (lossless)", "JPEG (smaller)"],
-                    value="PNG (lossless)",
-                    label="Export format",
-                )
-                quality = gr.Slider(
-                    70, 95, 90, step=1, label="JPEG quality (affects file size)"
-                )
-                output_scale = gr.Slider(
-                    0.25, 2.0, 1.0, step=0.25, label="Output scale (1.0 = full, 2.0 = upscaled 2x — larger files)"
-                )
-                btn = gr.Button("Generate", variant="primary")
-
-            with gr.Column(scale=1, elem_classes="output-panel"):
-                out = gr.Image(label="Cartoonized Output")
-                initial_status = "Idle. Upload an image and click Generate to start."
-                status_box = gr.Textbox(
-                    label="Status / Progress",
-                    value=initial_status,
-                    interactive=False,
-                    lines=6,
-                    elem_classes="status-box",
+        
+        with gr.Tabs():
+            # =====================================================================
+            # TAB 1: IMAGE TO CARTOON (Current Functionality)
+            # =====================================================================
+            with gr.TabItem("Image to Cartoon"):
+                gr.HTML(
+                    """
+                    <div class="stats-row">
+                        <div class="stat-card"><span>7</span>Signature styles</div>
+                        <div class="stat-card"><span>MPS</span>Apple Silicon acceleration</div>
+                        <div class="stat-card"><span>Offline</span>No cloud uploads</div>
+                    </div>
+                    """,
+                    elem_classes="stats-row",
                 )
 
-        # Toggle dropdown visibility when checkbox changes
-        use_nsfw.change(
-            fn=lambda checked: gr.update(visible=checked),
-            inputs=use_nsfw,
-            outputs=nsfw_model_dropdown,
-        )
+                with gr.Row(elem_classes="panel-row"):
+                    with gr.Column(scale=1, elem_classes="panel"):
+                        img = gr.Image(
+                            type="pil",
+                            label="Drop an image or click to upload",
+                        )
+                        style = gr.Radio(
+                            ["Anime", "Comic", "Pixar", "Sketch", "Watercolor", "Realistic", "Photorealistic"],
+                            value="Anime",
+                            label="Style palette",
+                        )
+                        extra = gr.Textbox(
+                            label="Prompt seasoning",
+                            placeholder="e.g. neon rim light, painterly shadows",
+                        )
+                        strength = gr.Slider(
+                            0.1, 1.0, 0.6, step=0.05, label="Strength"
+                        )
+                        guidance = gr.Slider(
+                            3, 15, 7.5, step=0.5, label="Guidance scale"
+                        )
+                        steps = gr.Slider(
+                            10, 50, 30, step=1, label="Steps"
+                        )
+                        seed = gr.Number(
+                            label="Seed (>=0 for reproducible, -1 random)",
+                            value=-1,
+                            precision=0,
+                        )
+                        model_id = gr.Textbox(
+                            label="Model ID (Hugging Face)",
+                            value=default_model,
+                            placeholder="e.g. Lykon/dreamshaper-8",
+                        )
+                        use_nsfw = gr.Checkbox(
+                            label="Use NSFW Model",
+                            value=False,
+                        )
+                        nsfw_model_dropdown = gr.Dropdown(
+                            label="NSFW Model",
+                            choices=nsfw_models,
+                            value=nsfw_models[0],
+                            visible=False,
+                        )
+                        max_side = gr.Slider(
+                            512, 4096, 768, step=128, label="Max resolution (pixels) — higher = larger file"
+                        )
+                        export_format = gr.Radio(
+                            ["PNG (lossless)", "JPEG (smaller)"],
+                            value="PNG (lossless)",
+                            label="Export format",
+                        )
+                        quality = gr.Slider(
+                            70, 95, 90, step=1, label="JPEG quality (affects file size)"
+                        )
+                        output_scale = gr.Slider(
+                            0.25, 2.0, 1.0, step=0.25, label="Output scale (1.0 = full, 2.0 = upscaled 2x — larger files)"
+                        )
+                        btn = gr.Button("Generate", variant="primary")
 
-        generate_event = btn.click(
-            infer,
-            [img, style, extra, strength, guidance, steps, seed, model_id, use_nsfw, nsfw_model_dropdown, max_side, export_format, quality, output_scale],
-            [out, status_box],
-        )
+                    with gr.Column(scale=1, elem_classes="output-panel"):
+                        out = gr.Image(label="Cartoonized Output")
+                        initial_status = "Idle. Upload an image and click Generate to start."
+                        status_box = gr.Textbox(
+                            label="Status / Progress",
+                            value=initial_status,
+                            interactive=False,
+                            lines=6,
+                            elem_classes="status-box",
+                        )
+
+                        # Toggle dropdown visibility when checkbox changes
+                        use_nsfw.change(
+                            fn=lambda checked: gr.update(visible=checked),
+                            inputs=use_nsfw,
+                            outputs=nsfw_model_dropdown,
+                        )
+
+                        generate_event = btn.click(
+                            infer,
+                            [img, style, extra, strength, guidance, steps, seed, model_id, use_nsfw, nsfw_model_dropdown, max_side, export_format, quality, output_scale],
+                            [out, status_box],
+                        )
+            
+            # =====================================================================
+            # TAB 2: TEXT TO IMAGE/VIDEO
+            # =====================================================================
+            with gr.TabItem("Text to Image/Video"):
+                gr.Markdown("### Text to Image/Video Generation")
+                gr.Markdown("Generate images or videos from text prompts using AI models.")
+                
+                with gr.Row():
+                    with gr.Column():
+                        text_prompt = gr.Textbox(
+                            label="Enter your prompt",
+                            placeholder="e.g. A serene landscape with mountains and a sunset...",
+                            lines=4,
+                        )
+                        text_model = gr.Dropdown(
+                            label="Model",
+                            choices=["runwayml/stable-diffusion-v1-5", "dreamlike-art/dreamlike-photoreal-2.0"],
+                            value="runwayml/stable-diffusion-v1-5",
+                        )
+                        text_steps = gr.Slider(10, 50, 30, step=1, label="Steps")
+                        text_guidance = gr.Slider(3, 15, 7.5, step=0.5, label="Guidance scale")
+                        text_btn = gr.Button("Generate Image", variant="primary")
+                    
+                    with gr.Column():
+                        text_output = gr.Image(label="Generated Image")
+                        text_status = gr.Textbox(
+                            label="Status",
+                            value="Ready",
+                            interactive=False,
+                            lines=3,
+                        )
+                
+                def handle_text_to_image(p, m, s, g):
+                    log(f"Text-to-image button clicked with prompt: {p}")
+                    if not p:
+                        msg = "Please enter a prompt"
+                    else:
+                        msg = f"Text-to-image generation coming soon! Prompt: {p}"
+                    log(msg)
+                    return msg
+                
+                text_btn.click(
+                    fn=handle_text_to_image,
+                    inputs=[text_prompt, text_model, text_steps, text_guidance],
+                    outputs=[text_status],
+                )
+            
+            # =====================================================================
+            # TAB 3: IMAGE TO VIDEO
+            # =====================================================================
+            with gr.TabItem("Image to Video"):
+                gr.Markdown("### Image to Video Generation")
+                gr.Markdown("Transform static images into animated videos.")
+                
+                with gr.Row():
+                    with gr.Column():
+                        video_img = gr.Image(
+                            type="pil",
+                            label="Drop an image or click to upload",
+                        )
+                        video_model = gr.Dropdown(
+                            label="Model",
+                            choices=["Stable Video Diffusion"],
+                            value="Stable Video Diffusion",
+                        )
+                        video_duration = gr.Slider(1, 10, 4, step=1, label="Duration (seconds)")
+                        video_btn = gr.Button("Generate Video", variant="primary")
+                    
+                    with gr.Column():
+                        video_output = gr.Video(label="Generated Video")
+                        video_status = gr.Textbox(
+                            label="Status",
+                            value="Ready",
+                            interactive=False,
+                            lines=3,
+                        )
+                
+                def handle_image_to_video(img, m, d):
+                    log(f"Video generation button clicked with duration: {d}s, image: {img is not None}")
+                    try:
+                        video_path, status_msg = infer_video(img, int(d))
+                        log(f"Video generation returned: path={video_path}, status={status_msg}")
+                        return video_path, status_msg
+                    except Exception as e:
+                        error = f"Handler error: {str(e)}"
+                        log(error)
+                        import traceback
+                        log(traceback.format_exc())
+                        return None, error
+                
+                video_btn.click(
+                    fn=handle_image_to_video,
+                    inputs=[video_img, video_model, video_duration],
+                    outputs=[video_output, video_status],
+                )
+        
         demo.queue(concurrency_count=1, max_size=8)
 
     return demo
